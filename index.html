@@ -1,0 +1,319 @@
+<html>
+<head>
+<style>
+
+body {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	font-size: 18px;
+}
+
+#page {
+	background: black;
+}
+
+#pageouter {
+	position: relative;
+}
+
+#cursor {
+	position: absolute;
+	left: 0;
+	top: 0;
+	background: #f0f0f0;
+	clip-path: polygon(0 11px,18px 11px,18px 24px,0 24px);
+	width: 18px;
+	height: 24px;
+	animation: cursoranim 600ms step-start infinite;
+}
+
+@keyframes cursoranim {
+	50% { opacity: 0; }
+}
+
+.button {
+	display: inline-block;
+	font-family: monospace;
+	font-size: 80%;
+	user-select: none;
+	border-radius: 3px;
+	background: lightgray;
+	padding: 2px;
+}
+
+.button:active {
+	background: red;
+}
+
+.checkbox::before {
+	content: '( )';
+}
+
+.checkbox[checked='1']::before {
+	content: '(×)';
+}
+
+.slider {
+	display: inline-block;
+	width: 100px;
+	position: relative;
+}
+
+.slider>div:first-child {
+	width: 100%;
+	height: 100%;
+	background: black;
+	clip-path: polygon(0 45%,100% 45%,100% 55%,0 55%);
+	position: absolute;
+	pointer-events: none;
+}
+
+.slider>div:last-child {
+	width: 5px;
+	height: 100%;
+	background: red;
+	position: absolute;
+	pointer-events: none;
+}
+
+#controls {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 5px;
+	opacity: .3;
+}
+
+#controls:hover {
+	opacity: 1;
+}
+
+</style>
+</head>
+<body onload='onLoad()'>
+
+<div>
+<div id='controls'>
+<div id='reset' class='button'>RESET</div>
+<div style='display:flex; justify-content:space-between'>
+<div id='mute' class='button checkbox'>MUTE</div>
+<div id='volume' class='slider' style='margin-left:10px'><div></div><div></div></div>
+</div>
+</div>
+<div style='position:relative'>
+<canvas id='page'></canvas>
+<div id='cursor'></div>
+</div>
+</div>
+
+<img id='font' style='display:none' src='font6x8.png'>
+
+<script>
+
+class Terminal {
+	constructor(wid,hgt) {
+		this._wid = wid;
+		this._hgt = hgt;
+		this._scrn = document.createElement('canvas');
+		this._scrn.width = wid*6;
+		this._scrn.height = hgt*8;
+		page.width = wid*18;
+		page.height = hgt*24;
+		this._printx = this._printy = 0;
+		this._fg = 'white';
+		this._bg = 'transparent';
+		mute.addEventListener('click',event=> {
+			this.initAudio();
+			mute.setAttribute('checked',mute.getAttribute('checked')=='1'? '':'1');
+			let x = mute.getAttribute('checked')=='1'? 0 : volume.value;
+			this._master.gain.setTargetAtTime(Math.pow(x,2),this._audio.currentTime,.01);
+		});
+		let fn = event=> {
+			if(!(event.buttons&1)) { return; }
+			this.initAudio();
+			let e = volume.childNodes[1];
+			let w = volume.offsetWidth - volume.childNodes[1].offsetWidth;
+			let x = Math.min(Math.max(event.offsetX/w,0),1);
+			e.style.left = Math.floor(x*w)+'px';
+			volume.value = x;
+			if(mute.getAttribute('checked')=='1') { x = 0; }
+			this._master.gain.setTargetAtTime(Math.pow(x,2),this._audio.currentTime,.01);
+		};
+		volume.addEventListener('mousemove',fn);
+		volume.addEventListener('mousedown',fn);
+		let x = .4;
+		let e = volume.childNodes[1];
+		e.style.left = Math.floor(x*(volume.offsetWidth-e.offsetWidth))+'px';
+		volume.value = x;
+	}
+	
+	initAudio() {
+		if(this._audio) { return; }
+		this._audio = new AudioContext();
+		this._master = this._audio.createGain();
+		this._master.connect(this._audio.destination);
+		this._master.gain.setValueAtTime(Math.pow(volume.value,2),0);
+	}
+	
+	static pstring(ctx,str,x,y,fg,bg) {
+		let w = str.length*6,x1 = x;
+		ctx.globalCompositeOperation = 'source-over';
+		ctx.fillStyle = fg;
+		ctx.fillRect(x,y,w,8);
+		ctx.globalCompositeOperation = 'destination-in';
+		for(let j = 0; j < str.length; j++) {
+			let c = str.charCodeAt(j);
+			if(0x20<=c && c<=0x7f) {
+				c -= 0x20;
+			} else if(0xa0<=c && c<=0xff) {
+				c -= 0x20;
+			} else if(0xe000<=c && c<=0xe01f) {
+				c -= 0xdfa0;
+			}
+			let a = 6*(c%32),b = 8*Math.floor(c/32);
+			ctx.save();
+			ctx.beginPath();
+			ctx.rect(x1,y,6,8);
+			ctx.clip();
+			ctx.drawImage(font,a,b,6,8,x1,y,6,8);
+			ctx.restore();
+			x1 += 6;
+		}
+		if(bg != 'transparent') {
+			ctx.save();
+			ctx.globalCompositeOperation = 'destination-over';
+			ctx.fillStyle = bg;
+			ctx.beginPath();
+			ctx.rect(x,y,w,8);
+			ctx.clip();
+			ctx.fill();
+			ctx.restore();
+		}
+	}
+	
+	print(str,fg,bg) {
+		if(!fg) { fg = this._fg; }
+		if(bg == null) { bg = this._bg; }
+		let ctx = this._scrn.getContext('2d');
+		ctx.imageSmoothingEnabled = 'false';
+		let i = 0,j = this._wid-this._printx,k = str.indexOf('\n');
+		while(i < str.length) {
+			let s;
+			if(j <= k || k < 0 && j <= str.length) {
+				s = str.substring(i,j);
+				i = j;
+			} else if(k >= 0) {
+				s = str.substring(i,k);
+				i = k + 1;
+				k = str.indexOf('\n',i);
+			} else {
+				s = str.substring(i);
+				i = -1;
+			}
+			if(s) {
+				Terminal.pstring(ctx,s,this._printx*6,this._printy*8,fg,bg);
+				this._printx += s.length;
+			}
+			if(i < 0) { break; }
+			if(++this._printy == this._hgt) {
+				this._printy--;
+				ctx.globalCompositeOperation = 'copy';
+				ctx.drawImage(this._scrn,0,8,this._scrn.width,this._scrn.height,0,0,this._scrn.width,this._scrn.height);
+			}
+			this._printx = 0;
+			j = i + this._wid;
+		}
+		let pctx = page.getContext('2d');
+		pctx.imageSmoothingEnabled = false;
+		pctx.globalCompositeOperation = 'copy';
+		pctx.drawImage(this._scrn,0,0,this._scrn.width,this._scrn.height,0,0,page.width,page.height);
+	}
+
+	static notes = [ 'f','f#','g','g#','a','b_','b','c','c#','d','e_','e' ];
+
+	static frequencies = [
+		0,0,0,0,0,0,0,16.35,17.32,18.35,19.45,20.6,
+		21.83,23.12,24.5,25.96,27.5,29.14,30.87,32.7,34.65,36.71,38.89,41.2,
+		43.65,46.25,49,51.91,55,58.27,61.74,65.41,69.3,73.42,77.78,82.41,
+		87.31,92.5,98,103.8,110,116.5,123.5,130.8,138.6,146.8,155.6,164.8,
+		174.6,185,196,207.7,220,233.1,246.9,261.6,277.2,293.7,311.1,329.6, //middle c=261
+		349.2,370,392,415.3,440,466.2,493.9,523.3,554.4,587.3,622.3,659.3,
+		698.5,740,784,830.6,880,932.3,987.8,1047,1109,1175,1245,1319,
+		1397,1480,1568,1661,1760,1865,1976,2093,2217,2349,2489,2637,
+		2794,2960,3136,3322,3520,3729,3951,4186,4435,4699,4978,5274,
+		5588,5920,6272,6645,7040,7459,7902,0,0,0,0,0
+	];
+
+	play(str) {
+		let osc = this._audio.createOscillator();
+		osc.type = 'square';
+		let gain = this._audio.createGain();
+		let t = this._audio.currentTime;
+		let tempo = .5;
+		let ramp = .01;
+		let leg;
+		gain.gain.setTargetAtTime(t,0,ramp);
+		for(let s of str.split(/\s+/)) {
+			let a = [],sum = 0;
+			for(let m of s.matchAll(/(\()?([a-gz])([#_9368 21.*)+-]*)/ig)) {
+				let c = m[2].toLowerCase();
+				if(m[1]) { leg = true; }
+				let x;
+				if(c != 'z') {
+					x = 48 + Terminal.notes.indexOf(c);
+				}
+				if(m[2] < 'a') { x += 12; }
+				let w = 1;
+				let s;
+				for(let i = 0; i < m[3].length; i++) {
+					c = m[3].charAt(i);
+					switch(c) {
+					case '#': x++; break;
+					case '_': x--; break;
+					case '+': x += 12; break;
+					case '-': x -= 12; break;
+					case '.': w *= 1.5; break;
+					case '*': s = true; break;
+					case ')': leg = false; break;
+					default:
+						w = Math.pow(2,'9368 21'.indexOf(c)-4);
+					}
+				}
+				a.push(x);
+				x = m[4];
+				a.push(w);
+				a.push(s? .75 : (leg? null:.875));
+				sum += w;
+			}
+			if(a.length == 3) sum = 1;
+			for(let i = 0; i < a.length; i += 3) {
+				let w = tempo*a[i+1]/sum;
+				if(a[i]) {
+					osc.frequency.setValueAtTime(Terminal.frequencies[a[i]],t);
+					gain.gain.setTargetAtTime(1,t,ramp);
+					if(a[i+2]) { gain.gain.setTargetAtTime(0,t+a[i+2]*w,ramp); }
+				} else {
+					gain.gain.setTargetAtTime(0,t,ramp);
+				}
+				t += w;
+			}
+		}
+		osc.connect(gain).connect(this._master);
+		osc.start();
+		osc.stop(t);
+	}
+};
+
+var tem = new Terminal(44,25);
+
+</script>
+<script>
+
+function onLoad() {
+	tem.print('@\u00c0\ue000');
+	for(let i = 0; i < 100; i++) tem.print(''+(i%10));
+}
+
+</script>
+</body>
+</html>
